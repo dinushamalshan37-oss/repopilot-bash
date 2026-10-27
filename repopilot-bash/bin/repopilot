@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# RepoPilot — safe, read-only diagnostics and opt-in .env initialization.
+set -euo pipefail
+VERSION=1.0.0
+
+usage() {
+  cat <<'HELP'
+RepoPilot v1.0 — developer environment diagnostics
+
+Usage:
+  repopilot scan [directory]              Detect stacks, tools and project health
+  repopilot doctor [directory]            Alias of scan
+  repopilot report [directory] <file>     Write a report; refuses overwrites
+  repopilot init-env [directory]          Show dry-run of safe .env initialization
+  repopilot init-env [directory] --apply  Copy .env.example to .env if absent
+  repopilot --version
+
+Never runs dependency-install scripts or arbitrary code from a repository.
+HELP
+}
+
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+resolve_dir() { local p="${1:-.}"; [[ -d "$p" ]] || fail "Not a directory: $p"; (cd -- "$p" && pwd -P); }
+contains_glob() { compgen -G "$1" >/dev/null 2>&1; }
+exists_csproj() { find "$1" -maxdepth 3 -type f -name '*.csproj' -print -quit 2>/dev/null | grep -q .; }
+has_cmd() { command -v "$1" >/dev/null 2>&1; }
+version_of() {
+  local command_name="$1"
+  case "$command_name" in
+    go) go version 2>/dev/null | head -n 1;;
+    python3) python3 --version 2>&1 | head -n 1;;
+    node) node --version 2>&1 | head -n 1;;
+    dotnet) dotnet --version 2>&1 | head -n 1;;
+    flutter) flutter --version 2>&1 | head -n 1;;
+    gcc) gcc --version 2>&1 | head -n 1;;
+    cargo) cargo --version 2>&1 | head -n 1;;
+    git) git --version 2>&1 | head -n 1;;
+  esac
+}
+
+report_scan() {
+  local root="$1"; local -a stacks=() tools=()
+  [[ -f "$root/go.mod" ]] && { stacks+=("Go"); tools+=(go); }
+  [[ -f "$root/package.json" ]] && { stacks+=("Node.js"); tools+=(node); }
+  if [[ -f "$root/requirements.txt" || -f "$root/pyproject.toml" ]]; then stacks+=("Python"); tools+=(python3); fi
+  [[ -f "$root/pubspec.yaml" ]] && { stacks+=("Flutter / Dart"); tools+=(flutter); }
+  exists_csproj "$root" && { stacks+=("C# / .NET"); tools+=(dotnet); }
+  [[ -f "$root/Cargo.toml" ]] && { stacks+=("Rust"); tools+=(cargo); }
+  if [[ -f "$root/Makefile" ]] && contains_glob "$root/*.c"; then stacks+=("C"); tools+=(gcc); fi
+  printf '\n┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n'
+  printf '┃  RepoPilot • Development Environment    ┃\n'
+  printf '┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n'
+  printf 'Folder: %s\n\n' "$root"
+  printf '[STACK DETECTION]\n'
+  if ((${#stacks[@]})); then printf '  - %s\n' "${stacks[@]}"; else printf '  No supported stack manifest found.\n'; fi
+  printf '\n[TOOLS]\n'
+  local tool
+  local seen='|'
+  tools+=(git)
+  for tool in "${tools[@]}"; do
+    [[ "$seen" == *"|$tool|"* ]] && continue
+    seen+="$tool|"
+    if has_cmd "$tool"; then printf '  [OK]   %-10s %s\n' "$tool" "$(version_of "$tool")";
+    else printf '  [WARN] %-10s not on PATH\n' "$tool"; fi
+  done
+  printf '\n[PROJECT HEALTH]\n'
+  if [[ -d "$root/.git" || -f "$root/.git" ]]; then printf '  [OK]   Git repository detected\n';
+  else printf '  [INFO] No .git folder at project root\n'; fi
+  [[ -f "$root/README.md" ]] && printf '  [OK]   README.md present\n' || printf '  [WARN] No README.md found\n'
+  [[ -f "$root/.gitignore" ]] && printf '  [OK]   .gitignore present\n' || printf '  [WARN] No .gitignore found\n'
+  if [[ -f "$root/.env" ]]; then
+    printf '  [INFO] .env file detected (contents not read)\n'
+    if [[ -d "$root/.git" || -f "$root/.git" ]] && has_cmd git; then
+      if git -C "$root" ls-files --error-unmatch .env >/dev/null 2>&1; then
+        printf '  [WARN] .env is tracked by Git; inspect for secrets and rotate exposed credentials!\n'
+      fi
+    fi
+  elif [[ -f "$root/.env.example" ]]; then printf '  [INFO] .env.example exists; try init-env (dry run)\n'; fi
+  [[ -d "$root/.github/workflows" ]] && printf '  [OK]   GitHub Actions workflows present\n' || printf '  [INFO] No GitHub Actions workflows found\n'
+  printf '\n[SUGGESTIONS]\n'
+  if [[ -f "$root/go.mod" ]]; then printf '  Go: go test ./...\n'; fi
+  if [[ -f "$root/pubspec.yaml" ]]; then printf '  Flutter: flutter doctor && flutter test\n'; fi
+  if [[ -f "$root/package.json" ]]; then printf '  Node: review package.json scripts before running npm install\n'; fi
+  if [[ -f "$root/requirements.txt" || -f "$root/pyproject.toml" ]]; then printf '  Python: create a virtualenv, review dependencies, then install\n'; fi
+  if exists_csproj "$root"; then printf '  .NET: dotnet build\n'; fi
+  if [[ -f "$root/Cargo.toml" ]]; then printf '  Rust: cargo test\n'; fi
+  printf '\nComplete. No packages installed or repository code executed.\n'
+}
+
+main() {
+  local cmd="${1:-help}"; [[ $# -gt 0 ]] && shift || true
+  case "$cmd" in
+    -h|--help|help) usage ;;
+    --version|-v) printf 'RepoPilot %s\n' "$VERSION" ;;
+    scan|doctor)
+      (($#<=1)) || fail "Usage: repopilot scan [directory]"
+      report_scan "$(resolve_dir "${1:-.}")"
+      ;;
+    report)
+      (($#>=1 && $#<=2)) || fail "Usage: repopilot report [directory] <output-file>"
+      local root out
+      if (($#==1)); then root="$(resolve_dir .)";out="$1";else root="$(resolve_dir "$1")";out="$2";fi
+      [[ -e "$out" ]] && fail "Refusing to overwrite: $out"
+      # Restrict output path to a new, regular file (no implicit directory creation).
+      report_scan "$root" > "$out"
+      printf '[OK] Saved report: %s\n' "$out"
+      ;;
+    init-env)
+      (($#<=2)) || fail "Usage: repopilot init-env [directory] [--apply]"
+      local root="." apply=0 arg
+      for arg in "$@"; do if [[ "$arg" == "--apply" ]];then apply=1;else root="$arg";fi;done
+      root="$(resolve_dir "$root")"
+      [[ -f "$root/.env.example" ]] || fail "Missing .env.example in $root"
+      [[ ! -e "$root/.env" ]] || fail ".env exists; no changes made"
+      if ((apply)); then
+        cp -n -- "$root/.env.example" "$root/.env"
+        chmod 600 "$root/.env"
+        printf '[OK] Created .env from .env.example; update values before use.\n'
+      else
+        printf '[DRY RUN] Would copy %s/.env.example to %s/.env\n' "$root" "$root"
+        printf 'Use --apply to proceed. Existing files are never overwritten.\n'
+      fi
+      ;;
+    *) fail "Unknown command: $cmd (try --help)";;
+  esac
+}
+main "$@"
