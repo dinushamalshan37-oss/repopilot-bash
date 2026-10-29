@@ -4,7 +4,7 @@ set -euo pipefail
 VERSION=1.0.0
 
 usage() {
-  cat <<'HELP' 
+  cat <<'HELP'  
 RepoPilot v1.0 — developer environment diagnostics
 
 Usage:
