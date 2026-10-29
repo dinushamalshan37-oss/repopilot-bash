@@ -18,7 +18,7 @@ Usage:
 Never runs dependency-install scripts or arbitrary code from a repository.
 HELP
 }
-
+ 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 resolve_dir() { local p="${1:-.}"; [[ -d "$p" ]] || fail "Not a directory: $p"; (cd -- "$p" && pwd -P); }
 contains_glob() { compgen -G "$1" >/dev/null 2>&1; }
