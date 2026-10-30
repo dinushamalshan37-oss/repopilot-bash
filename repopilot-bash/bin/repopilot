@@ -14,7 +14,7 @@ Usage:
   repopilot init-env [directory]          Show dry-run of safe .env initialization
   repopilot init-env [directory] --apply  Copy .env.example to .env if absent
   repopilot --version
-
+ 
 Never runs dependency-install scripts or arbitrary code from a repository.
 HELP
 }
