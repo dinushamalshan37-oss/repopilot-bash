@@ -15,7 +15,7 @@ Usage:
   repopilot init-env [directory] --apply  Copy .env.example to .env if absent
   repopilot --version
  
-Never runs dependency-install scripts or arbitrary code from a repository.
+Never runs dependency-install scripts or arbitrary code from a repository. 
 HELP
 }
  
